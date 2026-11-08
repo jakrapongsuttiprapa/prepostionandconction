@@ -410,6 +410,7 @@ const TOTAL = BANK.length;
 
 /* ---------------- helpers ---------------- */
 const $ = s => document.querySelector(s);
+const fullName = o => String((o&&o.name)||"").replace(/\s+/g," ").trim();
 const esc = s => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const store = {
   get(k,d){ try{ const v=localStorage.getItem(APP_ID+"_"+k); return v==null?d:JSON.parse(v);}catch(e){ return d; } },
@@ -461,7 +462,7 @@ async function api(action,data,opts){
 const Local = (function(){
   const DEF={passScore:15,remedialMin:0,examMinutes:40,antiCheat:true,faceScan:false,maxViolations:0,examOpen:true,remedialOpen:true,heroImg:"",adminPin:"7846"};
   const DEMO=[]; const fn=["สมชาย","สมหญิง","กมลชนก","ณัฐพล","ปิยะดา","ธนกร","พิมพ์ชนก","วรเมธ"]; const ln=["ใจดี","รักเรียน","มั่นคง","ศรีสุข","แสงทอง","บุญมา","พรหมมา","ทองดี"];
-  CLASSES.forEach((c,ci)=>{ for(let n=1;n<=8;n++) DEMO.push({c,n,f:fn[(n+ci)%8],l:ln[(n*3+ci)%8],p:(c==="ม.6/3"&&n===8)?"1234":""}); });
+  CLASSES.forEach((c,ci)=>{ for(let n=1;n<=8;n++) DEMO.push({c,n,name:fn[(n+ci)%8]+" "+ln[(n*3+ci)%8],p:(c==="ม.6/3"&&n===8)?"1234":""}); });
   function db(){ const d=store.get("localdb",null)||{rec:{},set:{},log:[]}; d.set=Object.assign({},DEF,d.set); return d; }
   function save(d){ store.set("localdb",d); }
   function st(r,s){ const done=r.status==="done"; const passed=done&&r.score>=s.passScore; const needed=done&&!passed?Math.max(0,s.passScore-r.score):0; return {examStatus:r.status||"",score:done?r.score:null,total:TOTAL,passed,needed,remDone:r.remDone||0,remAttempts:r.remAttempts||0,startEpoch:r.startEpoch||0,violations:r.violations||0,submittedAt:r.submittedAt||""}; }
@@ -471,8 +472,8 @@ const Local = (function(){
   return { handle(a,d){ return new Promise(res=>setTimeout(()=>res(this.run(a,d)),120)); },
     run(a,d){ const D=db(), s=D.set; const key=d.key; let r=key?D.rec[key]:null;
       const out=o=>{ save(D); return o; };
-      if(a==="init") return {ok:true,settings:pub(s),students:DEMO.map(x=>({c:x.c,n:x.n,f:x.f,l:x.l,p:!!x.p}))};
-      if(a==="login"){ const stu=DEMO.find(x=>x.c+"|"+x.n===key); if(!stu) return {ok:false,code:"no_student"}; const ex=D.rec[key]; if(ex&&needDev(ex,d)) return {ok:false,code:"device_locked"}; const resumeOk=d.resume&&ex&&ex.device===d.deviceId; if(stu.p&&!resumeOk&&String(d.pw||"")!==stu.p) return {ok:false,code:"bad_pw"}; r=D.rec[key]=ex||{key,c:stu.c,n:stu.n,name:stu.f+" "+stu.l}; r.device=d.deviceId; r.seen=Date.now(); return out({ok:true,state:st(r,s)}); }
+      if(a==="init") return {ok:true,settings:pub(s),students:DEMO.map(x=>({c:x.c,n:x.n,name:x.name,p:!!x.p}))};
+      if(a==="login"){ const stu=DEMO.find(x=>x.c+"|"+x.n===key); if(!stu) return {ok:false,code:"no_student"}; const ex=D.rec[key]; if(ex&&needDev(ex,d)) return {ok:false,code:"device_locked"}; const resumeOk=d.resume&&ex&&ex.device===d.deviceId; if(stu.p&&!resumeOk&&String(d.pw||"")!==stu.p) return {ok:false,code:"bad_pw"}; r=D.rec[key]=ex||{key,c:stu.c,n:stu.n,name:stu.name}; r.device=d.deviceId; r.seen=Date.now(); return out({ok:true,state:st(r,s)}); }
       if(["startExam","submitExam","startRemedial","submitRemedial","violation","progress"].includes(a)){ if(!r) return {ok:false,code:"no_record"}; if(needDev(r,d)) return {ok:false,code:"device_locked"}; }
       if(a==="startExam"){ if(r.status==="done") return {ok:false,code:"already_done",state:st(r,s)}; if(!s.examOpen) return {ok:false,code:"closed"}; if(r.status!=="doing"){ r.status="doing"; r.startEpoch=Date.now(); } if(d.photo) r.photo=d.photo; return out({ok:true,startEpoch:r.startEpoch,serverNow:Date.now(),state:st(r,s)}); }
       if(a==="submitExam"){ if(r.status==="done") return out({ok:true,already:true,state:st(r,s)}); r.status="done"; r.score=grade(d.answers); r.submittedAt=nowTH(); r.dur=Math.round((Date.now()-(r.startEpoch||Date.now()))/1000); r.progress="ส่งแล้ว"; return out({ok:true,state:st(r,s)}); }
@@ -483,7 +484,7 @@ const Local = (function(){
       /* admin */
       if(String(d.pin)!==String(s.adminPin)) return {ok:false,code:"bad_pin"};
       if(a==="checkPin") return {ok:true};
-      if(a==="list") return {ok:true,settings:s,students:DEMO.map(x=>({c:x.c,n:x.n,f:x.f,l:x.l,p:!!x.p})),records:Object.values(D.rec).map(x=>Object.assign({key:x.key,c:x.c,n:x.n,name:x.name,device:x.device?String(x.device).slice(-6):"",progress:x.progress||"",hasPhoto:!!x.photo,dur:x.dur||0,seen:x.seen||0},st(x,s)))};
+      if(a==="list") return {ok:true,settings:s,students:DEMO.map(x=>({c:x.c,n:x.n,name:x.name,p:!!x.p})),records:Object.values(D.rec).map(x=>Object.assign({key:x.key,c:x.c,n:x.n,name:x.name,device:x.device?String(x.device).slice(-6):"",progress:x.progress||"",hasPhoto:!!x.photo,dur:x.dur||0,seen:x.seen||0},st(x,s)))};
       if(a==="getPhoto") return {ok:true,photo:r&&r.photo||""};
       if(!r && a!=="saveSettings") return {ok:false,code:"no_record"};
       if(a==="releaseDevice"){ r.device=""; return out({ok:true}); }
@@ -534,14 +535,14 @@ function renderNames(){
   const sel=$("#selName"); const list=S.students.filter(s=>s.c===selClass).sort((a,b)=>a.n-b.n);
   if(!selClass){ sel.disabled=true; sel.innerHTML=`<option value="">— เลือกห้องก่อน —</option>`; }
   else if(!list.length){ sel.disabled=true; sel.innerHTML=`<option value="">— ยังไม่มีรายชื่อห้องนี้ (แจ้งครู) —</option>`; }
-  else { sel.disabled=false; sel.innerHTML=`<option value="">— เลือกชื่อของตัวเอง —</option>`+list.map(s=>`<option value="${esc(s.c+"|"+s.n)}">เลขที่ ${s.n} · ${esc(s.f)} ${esc(s.l)}</option>`).join(""); }
+  else { sel.disabled=false; sel.innerHTML=`<option value="">— เลือกชื่อของตัวเอง —</option>`+list.map(s=>`<option value="${esc(s.c+"|"+s.n)}">เลขที่ ${s.n} · ${esc(fullName(s))}</option>`).join(""); }
   onNamePick();
 }
 function onNamePick(){
   const v=$("#selName").value; const stu=S.students.find(s=>s.c+"|"+s.n===v);
   $("#pwWrap").classList.toggle("hidden",!(stu&&stu.p)); $("#inPw").value="";
   $("#confirmBox").classList.toggle("hidden",!stu); $("#chkMe").checked=false;
-  if(stu) $("#confirmName").textContent=`${stu.f} ${stu.l} (${stu.c} เลขที่ ${stu.n})`;
+  if(stu) $("#confirmName").textContent=`${fullName(stu)} (${stu.c} เลขที่ ${stu.n})`;
   updLoginBtn();
 }
 function updLoginBtn(){ $("#btnLogin").disabled=!($("#selName").value && $("#chkMe").checked); }
@@ -552,7 +553,7 @@ $("#btnLogin").onclick=async()=>{
   const r=await api("login",{key,deviceId:S.deviceId,pw:$("#inPw").value.trim()});
   b.textContent="เข้าสู่ระบบ ➜"; updLoginBtn();
   if(!r.ok){ $("#loginMsg").innerHTML=`<span style="color:#ff9aa2">❌ ${esc(errMsg(r))}</span>`; beep("bad"); return; }
-  S.me={key,c:stu.c,n:stu.n,name:stu.f+" "+stu.l}; S.state=r.state; store.set("session",S.me); beep("ok"); openLobby();
+  S.me={key,c:stu.c,n:stu.n,name:fullName(stu)}; S.state=r.state; store.set("session",S.me); beep("ok"); openLobby();
 };
 
 /* =====================================================================
@@ -866,7 +867,7 @@ async function admLoad(){
 function admRows(){
   if(!admData) return [];
   const byKey={}; admData.records.forEach(x=>byKey[x.key]=x);
-  const rows=admData.students.map(s=>{ const key=s.c+"|"+s.n; const r=byKey[key]; delete byKey[key]; return Object.assign({key,c:s.c,n:s.n,name:s.f+" "+s.l,rec:!!r},r||{}); });
+  const rows=admData.students.map(s=>{ const key=s.c+"|"+s.n; const r=byKey[key]; delete byKey[key]; return Object.assign({key,c:s.c,n:s.n,name:fullName(s),rec:!!r},r||{}); });
   Object.values(byKey).forEach(r=>rows.push(Object.assign({rec:true,orphan:true},r)));
   rows.forEach(r=>{ r.st = !r.rec||!r.device&&!r.examStatus ? "none" : r.examStatus==="doing" ? "doing" : r.examStatus!=="done" ? "in" : r.passed ? "pass" : r.remDone>=r.needed ? "fixed" : "fail"; });
   return rows.sort((a,b)=>a.c===b.c?a.n-b.n:a.c.localeCompare(b.c));
@@ -950,7 +951,7 @@ function renderSettings(){
 function renderHelp(){
   $("#admHelp").innerHTML=`<div class="info-list" style="display:grid;gap:10px">
   <li><span class="ico">1️⃣</span><span>เปิด Google Sheet ที่ผูกกับสคริปต์ → แท็บ <b>Students</b> (ระบบสร้างให้อัตโนมัติ)</span></li>
-  <li><span class="ico">2️⃣</span><span>กรอก 1 แถว / 1 คน: <b>ชั้น</b> (ม.6/1, ม.6/2, ม.6/3) · <b>เลขที่</b> · <b>ชื่อ</b> · <b>นามสกุล</b> · <b>รหัส</b> (ไม่บังคับ — ถ้าใส่ นักเรียนต้องกรอกรหัสนี้ตอนเข้าระบบ กันสวมรอยได้ดีขึ้น)</span></li>
+  <li><span class="ico">2️⃣</span><span>กรอก 1 แถว / 1 คน: <b>ชั้น</b> (ม.6/1, ม.6/2, ม.6/3) · <b>เลขที่</b> · <b>ชื่อ-นามสกุล</b> (ช่องเดียวกัน เช่น นายสมชาย ใจดี) · <b>รหัส</b> (ไม่บังคับ — ถ้าใส่ นักเรียนต้องกรอกรหัสนี้ตอนเข้าระบบ กันสวมรอยได้ดีขึ้น)</span></li>
   <li><span class="ico">3️⃣</span><span>ไม่ต้อง Deploy ใหม่ — รีเฟรชหน้าเว็บ รายชื่อขึ้นทันที</span></li>
   <li><span class="ico">🔒</span><span>นักเรียนเข้าระบบครั้งแรกจากเครื่องไหน ชื่อนั้นจะผูกกับเครื่องนั้น ถ้าเปลี่ยนเครื่อง/ล้างข้อมูลเบราว์เซอร์/ใช้โหมดไม่ระบุตัวตน ให้ครูกด <b>🔓 ปลดล็อก</b> ในแท็บผลสอบสด</span></li>
   <li><span class="ico">📊</span><span>ผลทั้งหมดอยู่ในแท็บ <b>Records</b> และประวัติแก้ตัวทุกรอบอยู่ในแท็บ <b>RemedialLog</b></span></li>
