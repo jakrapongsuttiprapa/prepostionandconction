@@ -460,14 +460,15 @@ async function api(action,data,opts){
 
 /* ---- local demo backend (mirrors Code.gs logic) ---- */
 const Local = (function(){
-  const DEF={passScore:15,remedialMin:0,examMinutes:40,antiCheat:true,faceScan:false,maxViolations:0,examOpen:true,remedialOpen:true,heroImg:"",adminPin:"7846"};
+  const DEF={passScore:15,remedialMin:0,examMinutes:40,antiCheat:true,faceScan:false,maxViolations:0,examOpen:true,remedialOpen:true,heroImg:"",adminPin:"7846",faceBypassCode:"1112"};
   const DEMO=[]; const fn=["สมชาย","สมหญิง","กมลชนก","ณัฐพล","ปิยะดา","ธนกร","พิมพ์ชนก","วรเมธ"]; const ln=["ใจดี","รักเรียน","มั่นคง","ศรีสุข","แสงทอง","บุญมา","พรหมมา","ทองดี"];
   CLASSES.forEach((c,ci)=>{ for(let n=1;n<=8;n++) DEMO.push({c,n,name:fn[(n+ci)%8]+" "+ln[(n*3+ci)%8],p:(c==="ม.6/3"&&n===8)?"1234":""}); });
   function db(){ const d=store.get("localdb",null)||{rec:{},set:{},log:[]}; d.set=Object.assign({},DEF,d.set); return d; }
   function save(d){ store.set("localdb",d); }
   function st(r,s){ const done=r.status==="done"; const passed=done&&r.score>=s.passScore; const needed=done&&!passed?Math.max(0,s.passScore-r.score):0; return {examStatus:r.status||"",score:done?r.score:null,total:TOTAL,passed,needed,remDone:r.remDone||0,remAttempts:r.remAttempts||0,startEpoch:r.startEpoch||0,violations:r.violations||0,submittedAt:r.submittedAt||""}; }
   function grade(ans){ let s=0; BANK.forEach(q=>{ if(ans&&ans[q.id]===q.o[0]) s++; }); return s; }
-  function pub(s){ const o=Object.assign({},s); delete o.adminPin; return o; }
+  function pub(s){ const o=Object.assign({},s); delete o.adminPin; delete o.faceBypassCode; return o; }
+  function faceGate(r,d,s){ const okP=/^data:image\/jpeg;base64,/.test(d.photo||""); if(!s.faceScan||okP){ if(okP) r.photo=d.photo; return null; } if(!d.bypass) return {ok:false,code:"face_required"}; if(String(d.bypass)!==String(s.faceBypassCode)) return {ok:false,code:"bad_bypass"}; r.photo="BYPASS"; return null; }
   function needDev(r,d){ return r.device && r.device!==d.deviceId; }
   return { handle(a,d){ return new Promise(res=>setTimeout(()=>res(this.run(a,d)),120)); },
     run(a,d){ const D=db(), s=D.set; const key=d.key; let r=key?D.rec[key]:null;
@@ -475,16 +476,16 @@ const Local = (function(){
       if(a==="init") return {ok:true,settings:pub(s),students:DEMO.map(x=>({c:x.c,n:x.n,name:x.name,p:!!x.p}))};
       if(a==="login"){ const stu=DEMO.find(x=>x.c+"|"+x.n===key); if(!stu) return {ok:false,code:"no_student"}; const ex=D.rec[key]; if(ex&&needDev(ex,d)) return {ok:false,code:"device_locked"}; const resumeOk=d.resume&&ex&&ex.device===d.deviceId; if(stu.p&&!resumeOk&&String(d.pw||"")!==stu.p) return {ok:false,code:"bad_pw"}; r=D.rec[key]=ex||{key,c:stu.c,n:stu.n,name:stu.name}; r.device=d.deviceId; r.seen=Date.now(); return out({ok:true,state:st(r,s)}); }
       if(["startExam","submitExam","startRemedial","submitRemedial","violation","progress"].includes(a)){ if(!r) return {ok:false,code:"no_record"}; if(needDev(r,d)) return {ok:false,code:"device_locked"}; }
-      if(a==="startExam"){ if(r.status==="done") return {ok:false,code:"already_done",state:st(r,s)}; if(!s.examOpen) return {ok:false,code:"closed"}; if(r.status!=="doing"){ r.status="doing"; r.startEpoch=Date.now(); } if(d.photo) r.photo=d.photo; return out({ok:true,startEpoch:r.startEpoch,serverNow:Date.now(),state:st(r,s)}); }
+      if(a==="startExam"){ if(r.status==="done") return {ok:false,code:"already_done",state:st(r,s)}; if(!s.examOpen) return {ok:false,code:"closed"}; { const fg=faceGate(r,d,s); if(fg) return fg; } if(r.status!=="doing"){ r.status="doing"; r.startEpoch=Date.now(); } return out({ok:true,startEpoch:r.startEpoch,serverNow:Date.now(),state:st(r,s)}); }
       if(a==="submitExam"){ if(r.status==="done") return out({ok:true,already:true,state:st(r,s)}); r.status="done"; r.score=grade(d.answers); r.submittedAt=nowTH(); r.dur=Math.round((Date.now()-(r.startEpoch||Date.now()))/1000); r.progress="ส่งแล้ว"; return out({ok:true,state:st(r,s)}); }
-      if(a==="startRemedial"){ const S=st(r,s); if(r.status!=="done"||S.passed) return {ok:false,code:"not_needed",state:S}; if(!s.remedialOpen) return {ok:false,code:"closed"}; if(S.remDone>=S.needed) return {ok:false,code:"rem_complete",state:S}; if(d.photo) r.photo=d.photo; return out({ok:true,round:(r.remAttempts||0)+1,state:S}); }
+      if(a==="startRemedial"){ const S=st(r,s); if(r.status!=="done"||S.passed) return {ok:false,code:"not_needed",state:S}; if(!s.remedialOpen) return {ok:false,code:"closed"}; if(S.remDone>=S.needed) return {ok:false,code:"rem_complete",state:S}; { const fg=faceGate(r,d,s); if(fg) return fg; } return out({ok:true,round:(r.remAttempts||0)+1,state:S}); }
       if(a==="submitRemedial"){ const S0=st(r,s); if(r.status!=="done"||S0.passed) return {ok:false,code:"not_needed"}; const sc=grade(d.answers); const counted=sc>=s.remedialMin && S0.remDone<S0.needed; r.remAttempts=(r.remAttempts||0)+1; if(counted) r.remDone=(r.remDone||0)+1; r.remLast=nowTH(); D.log.push({key,sc,counted,t:Date.now()}); return out({ok:true,score:sc,counted,state:st(r,s)}); }
       if(a==="violation"){ r.violations=(r.violations||0)+1; return out({ok:true,count:r.violations}); }
       if(a==="progress"){ r.progress=d.text; r.seen=Date.now(); return out({ok:true}); }
       /* admin */
       if(String(d.pin)!==String(s.adminPin)) return {ok:false,code:"bad_pin"};
       if(a==="checkPin") return {ok:true};
-      if(a==="list") return {ok:true,settings:s,students:DEMO.map(x=>({c:x.c,n:x.n,name:x.name,p:!!x.p})),records:Object.values(D.rec).map(x=>Object.assign({key:x.key,c:x.c,n:x.n,name:x.name,device:x.device?String(x.device).slice(-6):"",progress:x.progress||"",hasPhoto:!!x.photo,dur:x.dur||0,seen:x.seen||0},st(x,s)))};
+      if(a==="list") return {ok:true,settings:s,students:DEMO.map(x=>({c:x.c,n:x.n,name:x.name,p:!!x.p})),records:Object.values(D.rec).map(x=>Object.assign({key:x.key,c:x.c,n:x.n,name:x.name,device:x.device?String(x.device).slice(-6):"",progress:x.progress||"",hasPhoto:/^data:/.test(x.photo||""),bypass:x.photo==="BYPASS",dur:x.dur||0,seen:x.seen||0},st(x,s)))};
       if(a==="getPhoto") return {ok:true,photo:r&&r.photo||""};
       if(!r && a!=="saveSettings") return {ok:false,code:"no_record"};
       if(a==="releaseDevice"){ r.device=""; return out({ok:true}); }
@@ -499,7 +500,7 @@ const Local = (function(){
    STATE
    ===================================================================== */
 const S = { settings:{passScore:15,remedialMin:0,examMinutes:40,antiCheat:true,faceScan:false,maxViolations:0,examOpen:true,remedialOpen:true,heroImg:""}, students:[], me:null, state:null, deviceId:getDeviceId(), adminPin:null };
-const ERR = { network:"เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง 📶", device_locked:"ชื่อนี้ถูกใช้งานบนเครื่องอื่นแล้ว 🔒 ถ้าเป็นชื่อของเราจริง ให้แจ้งครูโอ๊ตเพื่อปลดล็อก", no_student:"ไม่พบชื่อนี้ในรายชื่อ", bad_pw:"รหัสนักเรียนไม่ถูกต้อง", closed:"ครูปิดระบบนี้อยู่ในขณะนี้", already_done:"สอบไปแล้ว (สอบได้ 1 ครั้ง)", not_needed:"ไม่ต้องสอบแก้ตัว", rem_complete:"สอบแก้ตัวครบแล้ว 🎉", bad_pin:"รหัส Admin ไม่ถูกต้อง", no_record:"ไม่พบข้อมูล กรุณาเข้าสู่ระบบใหม่" };
+const ERR = { network:"เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง 📶", device_locked:"ชื่อนี้ถูกใช้งานบนเครื่องอื่นแล้ว 🔒 ถ้าเป็นชื่อของเราจริง ให้แจ้งครูโอ๊ตเพื่อปลดล็อก", no_student:"ไม่พบชื่อนี้ในรายชื่อ", bad_pw:"รหัสนักเรียนไม่ถูกต้อง", closed:"ครูปิดระบบนี้อยู่ในขณะนี้", already_done:"สอบไปแล้ว (สอบได้ 1 ครั้ง)", not_needed:"ไม่ต้องสอบแก้ตัว", rem_complete:"สอบแก้ตัวครบแล้ว 🎉", bad_pin:"รหัส Admin ไม่ถูกต้อง", no_record:"ไม่พบข้อมูล กรุณาเข้าสู่ระบบใหม่", face_required:"ต้องสแกนใบหน้าก่อนเข้าสอบ", bad_bypass:"รหัสแทนการสแกนหน้าไม่ถูกต้อง 🔑" };
 const errMsg = r => ERR[r&&r.code] || (r&&r.error) || "เกิดข้อผิดพลาด";
 
 /* =====================================================================
@@ -597,12 +598,14 @@ $("#btnShowResult").onclick=()=>showResult();
    ===================================================================== */
 function faceScan(){
   return new Promise(resolve=>{
-    const root=$("#modalRoot"); root.innerHTML=`<div class="modal"><div class="box card pad"><h2>📷 สแกนใบหน้า</h2><div class="muted small" style="margin-bottom:10px">วางหน้าให้อยู่ในกรอบวงรี มองตรง ให้แสงพอเพียง ระบบจะถ่ายภาพอัตโนมัติ</div><div class="facebox"><video id="fv" playsinline muted autoplay></video><div class="oval" id="foval"></div><div class="scanbar"></div></div><div class="meter" style="margin-top:12px"><i id="fmeter"></i></div><div id="fmsg" class="small" style="margin-top:8px;min-height:1.3em">กำลังเปิดกล้อง…</div><div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn ghost" id="fcancel">ยกเลิก</button><button class="btn teal hidden" id="fretry">ลองใหม่</button></div></div></div>`;
+    const root=$("#modalRoot"); root.innerHTML=`<div class="modal"><div class="box card pad"><h2>📷 สแกนใบหน้า</h2><div class="muted small" style="margin-bottom:10px">วางหน้าให้อยู่ในกรอบวงรี มองตรง ให้แสงพอเพียง ระบบจะถ่ายภาพอัตโนมัติ</div><div class="facebox"><video id="fv" playsinline muted autoplay></video><div class="oval" id="foval"></div><div class="scanbar"></div></div><div class="meter" style="margin-top:12px"><i id="fmeter"></i></div><div id="fmsg" class="small" style="margin-top:8px;min-height:1.3em">กำลังเปิดกล้อง…</div><div id="fbypass" class="hidden" style="margin-top:12px;padding:12px 14px;border-radius:14px;background:rgba(255,195,77,.08);border:1px solid rgba(255,195,77,.4)"><b>🔑 เปิดกล้องไม่ได้?</b><div class="muted small">ให้ครูกรอกรหัสเพื่อเข้าสอบโดยไม่ต้องสแกนหน้า (ระบบบันทึกไว้ให้ครูเห็น)</div><div class="row" style="margin-top:8px"><input id="fcode" class="input grow" type="password" inputmode="numeric" autocomplete="off" placeholder="รหัสจากครู"><button class="btn amber" id="fcodeOk">ยืนยันรหัส</button></div><div id="fcodeMsg" class="small" style="min-height:1.2em;margin-top:4px"></div></div><div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn ghost" id="fcancel">ยกเลิก</button><button class="btn teal hidden" id="fretry">ลองใหม่</button></div></div></div>`;
     let stream=null, stop=false, okFrames=0, timer=null;
     const end=(photo)=>{ stop=true; clearTimeout(timer); if(stream) stream.getTracks().forEach(t=>t.stop()); root.innerHTML=""; resolve(photo); };
     $("#fcancel").onclick=()=>end(null);
     $("#fretry").onclick=()=>{ end(undefined); faceScan().then(resolve); };
-    const fail=(m)=>{ $("#fmsg").innerHTML=`<span style="color:#ff9aa2">${m}</span>`; $("#fretry").classList.remove("hidden"); };
+    const fail=(m)=>{ $("#fmsg").innerHTML=`<span style="color:#ff9aa2">${m}</span>`; $("#fretry").classList.remove("hidden"); $("#fbypass").classList.remove("hidden"); };
+    const useCode=()=>{ const v=$("#fcode").value.trim(); if(!/^\d{4,8}$/.test(v)){ $("#fcodeMsg").innerHTML='<span style="color:#ff9aa2">กรอกรหัสตัวเลข</span>'; return; } end({bypass:v}); };
+    $("#fcodeOk").onclick=useCode; $("#fcode").onkeydown=e=>{ if(e.key==="Enter") useCode(); };
     if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){ fail("อุปกรณ์/เบราว์เซอร์นี้ไม่รองรับกล้อง (ต้องเปิดผ่าน https) — แจ้งครู"); return; }
     navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:480}},audio:false}).then(async s=>{
       stream=s; if(stop){ s.getTracks().forEach(t=>t.stop()); return; }
@@ -674,11 +677,11 @@ const Q = { active:false, mode:"exam", list:[], ans:{}, idx:0, round:0, deadline
   persist(){ store.set(this.storeKey(),{ans:this.ans,idx:this.idx,round:this.round,v:AC.count}); },
 };
 async function startQuiz(mode){
-  const s=S.settings; let photo="";
+  const s=S.settings; let photo="", bypass="";
   const btn=mode==="exam"?$("#btnExam"):$("#btnRem"); btn.disabled=true;
   try{
-    if(s.faceScan){ photo=await faceScan(); if(!photo){ toast("ต้องสแกนใบหน้าก่อนเข้าสอบ","err"); return; } }
-    const r=await api(mode==="exam"?"startExam":"startRemedial",{key:S.me.key,deviceId:S.deviceId,photo});
+    if(s.faceScan){ const fr=await faceScan(); if(!fr){ toast("ต้องสแกนใบหน้าก่อนเข้าสอบ","err"); return; } if(typeof fr==="object") bypass=fr.bypass; else photo=fr; }
+    const r=await api(mode==="exam"?"startExam":"startRemedial",{key:S.me.key,deviceId:S.deviceId,photo,bypass});
     if(!r.ok){ toast(errMsg(r),"err"); if(r.state){ S.state=r.state; } if(r.code==="device_locked"){ store.del("session"); show("scrHome"); return; } openLobby(); return; }
     S.state=r.state||S.state;
     Q.mode=mode; Q.active=true; Q.submitting=false; Q.lock=false;
@@ -880,7 +883,7 @@ function renderAdmTable(){
   $("#admStats").innerHTML=[["นักเรียน",all.length,""],["กำลังสอบ",cnt("doing"),"var(--amber)"],["ส่งแล้ว",sub.length,"#fff"],["ผ่าน",cnt("pass"),"var(--green)"],["ไม่ผ่าน (ค้างแก้)",cnt("fail"),"var(--red)"],["แก้ตัวครบ",cnt("fixed"),"var(--teal)"],["เฉลี่ย",avg,"var(--sun)"]].map(s=>`<div class="stat"><span class="small muted">${s[0]}</span><b style="color:${s[2]||"#fff"}">${s[1]}</b></div>`).join("");
   const B={none:'<span class="badge n">ยังไม่เข้า</span>',in:'<span class="badge n">เข้าระบบแล้ว</span>',doing:'<span class="badge y">กำลังสอบ</span>',pass:'<span class="badge g">ผ่าน</span>',fail:'<span class="badge r">ไม่ผ่าน</span>',fixed:'<span class="badge b">แก้ตัวครบ</span>'};
   $("#admBody").innerHTML=rows.map(r=>{ const sig=JSON.stringify([r.st,r.score,r.remDone,r.violations,r.progress]); const fl=admPrev[r.key]&&admPrev[r.key]!==sig?"flash":""; admPrev[r.key]=sig;
-    return `<tr class="${fl}"><td>${esc(r.c)}</td><td>${esc(r.n)}</td><td>${esc(r.name)}${r.orphan?' <span class="badge y">ไม่อยู่ในรายชื่อ</span>':""}</td><td>${B[r.st]}</td><td>${r.examStatus==="done"?`<b>${r.score}</b>/${r.total}`:"-"}</td><td>${r.examStatus==="done"&&!r.passed?`${Math.min(r.remDone,r.needed)}/${r.needed} <span class="muted small">(ทำ ${r.remAttempts})</span>`:"-"}</td><td>${r.violations?`<span class="badge r">⚠️ ${r.violations}</span>`:"0"}</td><td class="small">${esc(r.progress||"")}</td><td class="small">${esc(r.submittedAt||"")}</td><td class="small">${r.device?"🔒 …"+esc(r.device):"-"}</td><td>${r.rec?`<div class="row" style="gap:4px;flex-wrap:nowrap">${r.hasPhoto?`<button class="btn ghost sm" data-a="photo" data-k="${esc(r.key)}">📷</button>`:""}${r.device?`<button class="btn ghost sm" data-a="releaseDevice" data-k="${esc(r.key)}">🔓 ปลดล็อก</button>`:""}${r.examStatus?`<button class="btn ghost sm" data-a="resetExam" data-k="${esc(r.key)}">♻️ สอบใหม่</button>`:""}${r.remAttempts?`<button class="btn ghost sm" data-a="resetRemedial" data-k="${esc(r.key)}">🔁 ล้างแก้ตัว</button>`:""}</div>`:""}</td></tr>`; }).join("") || `<tr><td colspan="11" class="center muted" style="padding:30px">ไม่มีข้อมูล</td></tr>`;
+    return `<tr class="${fl}"><td>${esc(r.c)}</td><td>${esc(r.n)}</td><td>${esc(r.name)}${r.orphan?' <span class="badge y">ไม่อยู่ในรายชื่อ</span>':""}</td><td>${B[r.st]}</td><td>${r.examStatus==="done"?`<b>${r.score}</b>/${r.total}`:"-"}</td><td>${r.examStatus==="done"&&!r.passed?`${Math.min(r.remDone,r.needed)}/${r.needed} <span class="muted small">(ทำ ${r.remAttempts})</span>`:"-"}</td><td>${r.violations?`<span class="badge r">⚠️ ${r.violations}</span>`:"0"}</td><td class="small">${esc(r.progress||"")}</td><td class="small">${esc(r.submittedAt||"")}</td><td class="small">${r.device?"🔒 …"+esc(r.device):"-"}</td><td>${r.rec?`<div class="row" style="gap:4px;flex-wrap:nowrap">${r.hasPhoto?`<button class="btn ghost sm" data-a="photo" data-k="${esc(r.key)}">📷</button>`:""}${r.bypass?`<span class="badge y" title="เข้าสอบด้วยรหัสแทนการสแกนหน้า">🔑 ใช้รหัส</span>`:""}${r.device?`<button class="btn ghost sm" data-a="releaseDevice" data-k="${esc(r.key)}">🔓 ปลดล็อก</button>`:""}${r.examStatus?`<button class="btn ghost sm" data-a="resetExam" data-k="${esc(r.key)}">♻️ สอบใหม่</button>`:""}${r.remAttempts?`<button class="btn ghost sm" data-a="resetRemedial" data-k="${esc(r.key)}">🔁 ล้างแก้ตัว</button>`:""}</div>`:""}</td></tr>`; }).join("") || `<tr><td colspan="11" class="center muted" style="padding:30px">ไม่มีข้อมูล</td></tr>`;
   $("#admBody").querySelectorAll("button[data-a]").forEach(b=>b.onclick=()=>admAction(b.dataset.a,b.dataset.k));
 }
 ["#fClass","#fStatus"].forEach(s=>$(s).onchange=renderAdmTable); $("#fSearch").oninput=renderAdmTable;
@@ -911,6 +914,7 @@ function renderSettings(){
     ${num("sPass","🎯 คะแนนผ่าน","จำนวนครั้งแก้ตัว = คะแนนผ่าน − คะแนนที่ได้",s.passScore,1,TOTAL)}
     ${num("sRemMin","✅ คะแนนขั้นต่ำต่อรอบแก้ตัว","รอบที่ได้ต่ำกว่านี้ไม่นับ (0 = ทำจบก็นับ)",s.remedialMin,0,TOTAL)}
     ${num("sMin","⏱️ เวลาสอบ (นาที)","0 = ไม่จำกัดเวลา",s.examMinutes,0,300)}
+    ${`<div class="switch"><div><b>🔑 รหัสแทนการสแกนหน้า</b><div class="muted small">ใช้เมื่อเครื่องนักเรียนเปิดกล้องไม่ได้ (ตัวเลข 4–8 หลัก)</div></div><input type="text" id="sBypass" class="input" inputmode="numeric" style="width:110px;text-align:center" value="${esc(s.faceBypassCode||"")}" placeholder="1112"></div>`}
     ${num("sMaxV","🚨 ทุจริตครบกี่ครั้งให้ส่งอัตโนมัติ","0 = แค่เตือน+บันทึก ไม่บังคับส่ง",s.maxViolations,0,50)}
   </div>
   <div class="card pad" style="margin-top:16px;background:rgba(0,0,0,.2)">
@@ -939,12 +943,13 @@ function renderSettings(){
     const hero=$("#sHero").value.trim();
     if(hero && (!/^https:\/\//i.test(hero) || /^https?:\/\/(www\.)?postimg\.cc\//i.test(hero))){ toast("ลิงก์รูปไม่ถูกต้อง (ต้องเป็น Direct link https://i.postimg.cc/…)","err"); return; }
     const ns={antiCheat:$("#sAnti").checked,faceScan:$("#sFace").checked,examOpen:$("#sExamOpen").checked,remedialOpen:$("#sRemOpen").checked,passScore:clamp($("#sPass").value,1,TOTAL,15),remedialMin:clamp($("#sRemMin").value,0,TOTAL,0),examMinutes:clamp($("#sMin").value,0,300,40),maxViolations:clamp($("#sMaxV").value,0,50,0),heroImg:hero};
+    const bp=$("#sBypass").value.trim(); if(bp){ if(!/^\d{4,8}$/.test(bp)){ toast("รหัสแทนการสแกนหน้า ต้องเป็นตัวเลข 4–8 หลัก","err"); return; } ns.faceBypassCode=bp; }
     const pin=$("#sPin").value.trim(); if(pin){ if(!/^\d{4,8}$/.test(pin)){ toast("รหัส Admin ต้องเป็นตัวเลข 4–8 หลัก","err"); return; } ns.adminPin=pin; }
     const b=$("#sSave"); b.disabled=true; b.textContent="กำลังบันทึก…";
     const r=await api("saveSettings",{pin:S.adminPin,settings:ns}); b.disabled=false; b.textContent="💾 บันทึกการตั้งค่า";
     if(!r.ok){ toast("❌ บันทึกไม่สำเร็จ: "+errMsg(r),"err"); return; }
     if(ns.adminPin) S.adminPin=ns.adminPin; $("#sPin").value="";
-    Object.assign(S.settings,ns); delete S.settings.adminPin; if(admData) admData.settings=Object.assign({},admData.settings,ns);
+    Object.assign(S.settings,ns); delete S.settings.adminPin; delete S.settings.faceBypassCode; if(admData) admData.settings=Object.assign({},admData.settings,ns);
     applySettings(); toast("✅ บันทึกการตั้งค่าแล้ว","ok"); $("#sMsg").textContent="บันทึกล่าสุด "+new Date().toLocaleTimeString("th-TH");
   };
 }
